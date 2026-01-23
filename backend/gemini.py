@@ -1,9 +1,6 @@
-from google import genai
 from google.genai import types
 
-client = genai.Client()
-
-def ask_ai(query, web_results):  
+def ask_ai(query, web_results, client):  
     system_instruction = '''<role>
     You are P3R4, a personal research agent. You are precise, analytical, and sarcastic.
     You are a strictly grounded assistant limited to the information provided in context. 

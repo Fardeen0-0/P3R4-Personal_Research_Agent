@@ -5,9 +5,11 @@ from datetime import timedelta
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi import Request
+from fastapi.responses import RedirectResponse
 from gemini import ask_ai
+from google import genai
 from search import run_search
-
+from auth import auth_flow
 
 load_dotenv()
 key = os.getenv("BRAVE_API_KEY")
@@ -32,20 +34,31 @@ async def lifespan(app: FastAPI): #determines the startup (routine before it sta
 
 app = FastAPI(lifespan=lifespan)
 
-
-# @app.get("/search")
-# async def search(query: str, request: Request):
-#         db_pool = request.app.state.db_pool
-#         results = await run_search(query, db_pool, cache_ttl, key, mock)
-
-#         return {
-#             "query": query, 
-#             "results": results
-#         }
+client = genai.Client()
 
 @app.get("/ask")
 async def ask(query: str, request: Request):
     db_pool = request.app.state.db_pool
     web_results = await run_search(query, db_pool, cache_ttl, key, mock)
-    response = ask_ai(query, web_results)
+    response = ask_ai(query, web_results,client)
     return {"query":query, "results": response}
+
+client_id=os.environ["GOOGLE_CLIENT_ID"]
+client_secret=os.environ["GOOGLE_CLIENT_SECRET"]
+redirect_uri=os.environ["GOOGLE_REDIRECT_URI"]
+
+@app.get("/auth/google/start")
+async def auth_start():
+    flow = auth_flow(client_id,client_secret,redirect_uri)
+    auth_url, state =  flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    return RedirectResponse(auth_url)
+
+@app.get("/auth/google/callback")
+async def auth_callback(code):
+    flow = auth_flow(client_id,client_secret,redirect_uri)
+    flow.fetch_token(code=code)
+    creds = flow.credentials
