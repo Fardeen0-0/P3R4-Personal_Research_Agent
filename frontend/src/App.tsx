@@ -1,4 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Msg = { role: "user" | "assistant"; text: string };
 
@@ -6,15 +8,20 @@ function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
 }
 
-function fakeLLMAnswer(query: string) {
-  // Mocked response for now (until your backend exists)
-  return new Promise<string>((resolve) => {
-    setTimeout(() => {
-      resolve(
-        `Mock answer for: "${query}"`
-      );
-    }, 900);
-  });
+type LLMResponse = {
+  query: string,
+  results: string
+}
+async function LLMAnswer(query: string): Promise<string>{
+  const res = await fetch(`http://127.0.0.1:8000/ask?query=${encodeURIComponent(query)}`);
+
+  if (!res.ok){
+    const text = await res.text().catch(()=>"");
+    throw new Error(text || `Backend error: ${res.status} ${res.statusText}`);
+  }
+
+  const data: LLMResponse = await res.json();
+  return data.results
 }
 
 export default function App() {
@@ -46,12 +53,7 @@ export default function App() {
     scrollToBottom();
 
     try {
-      // ✅ Later, swap this mock for your FastAPI call:
-      // const res = await fetch(`http://localhost:8000/ask?query=${encodeURIComponent(q)}`);
-      // const data = await res.json();
-      // const answer = data.results ?? JSON.stringify(data, null, 2);
-
-      const answer = await fakeLLMAnswer(q);
+      const answer = await LLMAnswer(q);
 
       setMessages((prev) => [...prev, { role: "assistant", text: answer }]);
       setLastAnswerDone(true);
@@ -112,8 +114,6 @@ export default function App() {
               <h1 style={styles.heroH1}>Welcome to P3R4</h1>
               <p style={styles.heroP}>
                 Search the web, verify sources, and turn answers into clean write-ups.
-                <br />
-                (For now this is a UI prototype — backend comes next.)
               </p>
 
               <div style={styles.heroRow}>
@@ -160,7 +160,18 @@ export default function App() {
                       <div style={styles.bubbleRole}>
                         {m.role === "user" ? "You" : "P3R4"}
                       </div>
-                      <pre style={styles.bubbleText}>{m.text}</pre>
+                      <div style={styles.bubbleText}>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ node, ...props }) => (
+                              <a {...props} target="_blank" rel="noreferrer" />
+                            ),
+                          }}
+                        >
+                          {m.text}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   ))
                 }
@@ -186,10 +197,6 @@ export default function App() {
               </div>
 
               <div style={styles.footerRow}>
-                <div style={styles.smallPrint}>
-                  Backend not wired yet — currently using a mocked response.
-                </div>
-
                 {lastAnswerDone && (
                   <div style={styles.writeWrap}>
                     <button

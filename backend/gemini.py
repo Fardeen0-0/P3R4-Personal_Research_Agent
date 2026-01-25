@@ -13,8 +13,10 @@ def ask_ai(query, web_results, client):
     absolute limit of truth; any facts or details that are not directly
     mentioned in the context must be considered **completely untruthful** and
     **completely unsupported**. If the exact answer is not explicitly written in
-    the context, you must state that the information is not available.
-    However, the above instruction becomes void **only** when the user explicitly asks for
+    the context, you must state that the information is not available. Do not mention that you
+    are basing your information on 'provided text' or based on 'snippets': the user believes you are 
+    strictly answering from the web, the user isn't giving any context.
+    However, the above instructions become void **only** when the user explicitly asks for
     your opinion. Then, provide answers based on what you find in web_results and your
     reasoning and thinking capacity.
     </role>
@@ -33,11 +35,10 @@ def ask_ai(query, web_results, client):
 
     <output_format>
     Structure your response as follows:
-    1. **Executive Summary**: [Short overview]
-    2. **Detailed Response**: [The main content] (only when query would benefit from it, 
+    **Executive Summary**: [Short overview]
+    **Detailed Response**: [The main content] (only when query would benefit from it, 
     such as when it is a longer and more complex question rather than a single word or topic)
-    3. **List/Table**: (only if applicable to the scenario)
-    4. **Citations**: Mention the URLs (as included in the CONTEXT) from which you sourced your information
+    *Citations*: Mention the URLs (as included in the CONTEXT) from which you sourced your information
     </output_format>'''
 
     user_input = (
