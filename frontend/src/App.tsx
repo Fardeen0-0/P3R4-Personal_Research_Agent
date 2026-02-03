@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect,useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -13,7 +13,21 @@ type LLMResponse = {
   results: string
 }
 async function LLMAnswer(query: string): Promise<string>{
-  const res = await fetch(`http://127.0.0.1:8000/ask?query=${encodeURIComponent(query)}`);
+  const MOCK_MODE = false; // make it true to mock..... duh
+
+  if (MOCK_MODE) {
+    // Simulate network latency
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    
+    return `### Mock Research Report
+    
+    Searching for: **${query}**
+
+    1. This is a simulated response.
+    2. It allows you to test the "Write to Docs" feature.
+    3. No API credits were harmed in the making of this message.`;
+  }
+  const res = await fetch(`http://localhost:8000/ask?query=${encodeURIComponent(query)}`);
 
   if (!res.ok){
     const text = await res.text().catch(()=>"");
@@ -30,6 +44,13 @@ export default function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [lastAnswerDone, setLastAnswerDone] = useState(false);
+  const [writeOpen, setWriteOpen] = useState(false);
+  const [writeChecking, setWriteChecking] = useState(false);
+  const [docUrl, setDocUrl] = useState("");
+  const [writeStatus, setWriteStatus] = useState<"idle" | "sending" | "done">(
+    "idle"
+  );
+  const [writeError, setWriteError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -77,6 +98,122 @@ export default function App() {
     }
   }
 
+  async function handleWriteClick() {
+    setWriteError(null);
+    setWriteStatus("idle");
+    setWriteChecking(true);
+
+    try {
+      const res = await fetch("http://localhost:8000/docs/status", {
+        credentials: "include", // so FastAPI can see session cookie
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `Status ${res.status}`);
+      }
+
+      const data = (await res.json()) as { connected: boolean };
+      console.log("status response in frontend:", data);
+
+      if (data.connected) {
+        // User already connected -> show popup for Docs link
+        setWriteOpen(true);
+      } else {
+        // Not connected -> send them to Google OAuth
+        window.location.href = "http://localhost:8000/auth/google/start";
+      }
+    } catch (e: any) {
+      console.error(e);
+      setWriteError(e?.message ?? "Failed to check Google Docs connection.");
+    } finally {
+      setWriteChecking(false);
+    }
+  }
+
+  function getLastAssistantMessage(): string | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") {
+        return messages[i].text;
+      }
+    }
+    return null;
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("write") === "1") {
+      // Clear the flag from the URL
+      window.history.replaceState({}, "", window.location.pathname);
+      // This will run the same logic as clicking "Write"
+      void handleWriteClick();
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("p3r4.messages");
+      if (saved) {
+        const parsed = JSON.parse(saved) as Msg[];
+        if (parsed.length > 0) {
+          setMessages(parsed);
+          setScreen("chat");        // jump straight into chat if there's history
+          setLastAnswerDone(true);  // so Write button appears after auth
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load messages from localStorage", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("p3r4.messages", JSON.stringify(messages));
+    } catch (e) {
+      console.error("Failed to save messages to localStorage", e);
+    }
+  }, [messages]);
+
+
+
+  async function writeToDocs(docUrl: string): Promise<void> {
+    const content = getLastAssistantMessage();
+
+    if (!content) {
+      setWriteError("There is no assistant response to write yet.");
+      return;
+    }
+
+    setWriteError(null);
+    setWriteStatus("sending");
+
+    try {
+      const res = await fetch("http://localhost:8000/docs/write", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include", // sends the session cookie
+        body: JSON.stringify({
+          doc_url: docUrl,
+          text: content,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `Write failed: ${res.status}`);
+      }
+
+      setWriteStatus("done");
+    } catch (e: any) {
+      console.error(e);
+      setWriteError(e?.message ?? "Failed to write to Google Docs.");
+      setWriteStatus("idle");
+    }
+  }
+
+
   return (
     <div style={styles.page}>
       <div style={styles.bgGlow1} />
@@ -88,7 +225,7 @@ export default function App() {
             <div style={styles.logo} aria-hidden />
             <div>
               <div style={styles.title}>P3R4</div>
-              <div style={styles.subtitle}>Personal Research Agent (frontend prototype)</div>
+              <div style={styles.subtitle}>Personal Research Agent</div>
             </div>
           </div>
 
@@ -101,6 +238,7 @@ export default function App() {
                 setInput("");
                 setLoading(false);
                 setLastAnswerDone(false);
+                window.localStorage.removeItem("p3r4.messages");
               }}
             >
               Reset
@@ -175,6 +313,74 @@ export default function App() {
                     </div>
                   ))
                 }
+                {writeOpen && (
+                  <div style={styles.modalOverlay}>
+                    <div style={styles.modal}>
+                      <div style={styles.modalTitle}>Send to Google Docs</div>
+                      <div style={styles.modalBody}>
+                        <p style={styles.modalText}>
+                          Paste the link to your Google Docs file. The latest answer from P3R4
+                          will be written into that document.
+                        </p>
+
+                        <input
+                          type="text"
+                          value={docUrl}
+                          onChange={(e) => setDocUrl(e.target.value)}
+                          placeholder="https://docs.google.com/document/d/…"
+                          style={styles.modalInput}
+                        />
+
+                        {writeError && (
+                          <div style={styles.modalError}>
+                            {writeError}
+                          </div>
+                        )}
+
+                        {writeStatus === "sending" && (
+                          <div style={styles.modalHint}>
+                            Please wait. Writing in progress…
+                          </div>
+                        )}
+
+                        {writeStatus === "done" && (
+                          <div style={styles.modalSuccess}>
+                            Done! Your content has been written to your docs page.
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={styles.modalButtons}>
+                        <button
+                          style={styles.modalSecondaryBtn}
+                          onClick={() => {
+                            setWriteOpen(false);
+                            setDocUrl("");
+                            setWriteStatus("idle");
+                            setWriteError(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+
+                        <button
+                          style={styles.modalPrimaryBtn}
+                          onClick={() => {
+                            if (!docUrl.trim()) return;
+                            void writeToDocs(docUrl.trim());
+                          }}
+                          disabled={!docUrl.trim() || writeStatus === "sending"}
+                        >
+                          {writeStatus === "sending"
+                            ? "Writing…"
+                            : writeStatus === "done"
+                            ? "Done"
+                            : "Write to Docs"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div style={styles.composer}>
@@ -201,9 +407,10 @@ export default function App() {
                   <div style={styles.writeWrap}>
                     <button
                       style={styles.writeBtn}
-                      onClick={() => alert("Not wired yet. Later this will link Google + write to Docs.")}
+                      onClick={handleWriteClick}
+                      disabled={writeChecking}
                     >
-                      Write
+                      {writeChecking ? "Checking..." : "Write"}
                     </button>
                     <div style={styles.writeDesc}>
                       Link your Google account to write into your Docs file.
@@ -472,4 +679,90 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
   },
   writeDesc: { fontSize: 12, opacity: 0.7, maxWidth: 320 },
+
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.55)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 40,
+  },
+  modal: {
+    width: "min(480px, 92vw)",
+    background: "rgba(10,10,16,0.96)",
+    borderRadius: 20,
+    border: "1px solid rgba(255,255,255,0.12)",
+    boxShadow: "0 30px 120px rgba(0,0,0,0.65)",
+    padding: 22,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 800,
+    marginBottom: 8,
+  },
+  modalBody: {
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  modalText: {
+    fontSize: 14,
+    opacity: 0.8,
+    marginBottom: 12,
+  },
+  modalInput: {
+    width: "100%",
+    padding: 10,
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.16)",
+    background: "rgba(255,255,255,0.04)",
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 13,
+    outline: "none",
+    marginBottom: 10,
+  },
+  modalButtons: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 6,
+  },
+  modalSecondaryBtn: {
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    color: "rgba(255,255,255,0.9)",
+    borderRadius: 12,
+    padding: "8px 12px",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  modalPrimaryBtn: {
+    background:
+      "linear-gradient(135deg, rgba(120,140,255,0.95), rgba(255,130,200,0.92))",
+    border: "none",
+    color: "rgba(10,10,18,0.95)",
+    borderRadius: 12,
+    padding: "8px 14px",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 700,
+  },
+  modalError: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#ffb3b3",
+  },
+  modalHint: {
+    marginTop: 6,
+    fontSize: 12,
+    opacity: 0.8,
+  },
+  modalSuccess: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#a5ffbf",
+  },
+
 };
